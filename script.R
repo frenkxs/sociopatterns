@@ -8,7 +8,7 @@ x <- graph_from_adjacency_matrix(X, mode = 'undirected')
 y <- graph_from_adjacency_matrix(Y, weighted = TRUE, mode = 'undirected')
 
 
-
+list.edge.attributes(x)
 list.edge.attributes(y)
 E(y)$weight
 
@@ -206,3 +206,22 @@ table(time_frame, clust_members)
 
 #--------------------------------------------
 
+# Exponential Random Graph model
+
+library(Bergm)
+library(intergraph)
+library(network)
+
+
+# subset of the graph with only the nodes interacting the time 3
+x_three <- induced_subgraph(x, V(x)[time_frame == 3])
+x_three <- asNetwork(x_three)
+
+x_ergm <- x_three ~ edges + kstar(2) + triangle
+
+summary(x_ergm)
+
+x_bergm <- bergm(x_ergm)
+summary(x_bergm)
+plot(x_bergm)
+plot(bgof(x_bergm))
