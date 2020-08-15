@@ -101,7 +101,7 @@ cor(d_bin, knn(x)$knn)
 #--------------------------------------------
 
 # Page rank centrality
-pr <- page_rank(x)$vector # Page-Rank centrality 
+pr <- page_rank(x)$vector 
 
 # Betweenness centrality 
 bc <- centr_betw(x)$res 
@@ -225,3 +225,142 @@ x_bergm <- bergm(x_ergm)
 summary(x_bergm)
 plot(x_bergm)
 plot(bgof(x_bergm))
+
+
+#--------------------------------------------
+
+# Euclidean Latent Position Model
+library(latentnet)
+
+# one (no) clusters
+x_lpm1 <- ergmm(x_three ~ euclidean(d = 2, G = 1), verbose = TRUE)
+
+# two clusters
+x_lpm2 <- ergmm(x_three ~ euclidean(d = 2, G = 2), verbose = TRUE)
+
+# three clusters
+x_lpm3 <- ergmm(x_three ~ euclidean(d = 2, G = 3), verbose = TRUE)
+
+# four clusters
+x_lpm4 <- ergmm(x_three ~ euclidean(d = 2, G = 4), verbose = TRUE)
+
+summary(x_lpm1)
+extract(x_lpm1, include.bic = TRUE)
+
+bic.ergmm(x_lpm1)$overall
+bic.ergmm(x_lpm2)$overall 
+bic.ergmm(x_lpm3)$overall
+bic.ergmm(x_lpm4)$overall
+
+# model with 2 cluster is the best
+
+G <- 2
+
+plot(x_lpm2, main = "Latent positions model with 2 clusters", print.formula = FALSE, 
+     labels = TRUE, label.cex = 0.5, label.pad = 0.1)
+
+
+#--------------------------------------------
+
+# resilience - random
+
+# Number of iteration
+N <- 50 
+
+# Number of nodes to be removed
+remove <- 200 
+
+# Initialise containers to store the statistics
+component_s <- matrix(NA, N, remove + 1) 
+clustering_c <- matrix(NA, N, remove + 1) 
+modularity_c <- matrix(NA, N, remove + 1)
+
+# add the initial values
+component_s[, 1] <- components(x)$csize
+clustering_c[, 1] <- transitivity(x)
+modularity_c[, 1] <- modularity(x, time_frame)
+
+for (iter in 1:N) {
+  # initiate the network
+  network <- x
+  
+  for (i in 1:remove) {
+    # choose a node at random to be removed 
+    selected_n <- sample(1:length(V(network)), 1, replace = TRUE) 
+     
+    # remove the selected node
+    network <- delete.vertices(network, selected_n)
+    
+    # calculate largest component
+    component_s[iter, i + 1] <- max(components(network)$csize) 
+    
+    # calculate clustering coefficient
+    clustering_c[iter, i + 1] <- transitivity(network)
+    
+    # calculate modularity
+    modularity_c[iter, i + 1] <- modularity(network, time_frame[-selected_n])
+  }
+}
+
+### Plotting function
+
+plot_net <- function(stats, ci = FALSE) {
+  # calculate the median and quantiles 
+  dat <- apply(stats, 2, quantile, probs = c(0.05, 0.5, 0.95)) 
+  
+  # create the background for the plot
+  plot(dat[2,], type = "n", xlab = "nodes removed", ylab = "statistic") 
+  
+  # add the empirical confidence bounds
+  if (ci) {
+  polygon(c(1:(remove + 1),(remove + 1):1), c(dat[1, ], rev(dat[3, ])), 
+          col = "grey", border = NA) 
+  }
+  # plot the median as a line
+  lines(dat[2,], type = "l", lwd = 2) 
+}
+
+plot_net(clustering_c)
+plot_net(component_s, ci = TRUE)
+plot_net(modularity_c, ci = TRUE)
+
+#--------------------------------------------
+
+# resilience - targeted removal
+
+# Number of nodes to be removed
+remove <- 400 
+
+# Initialise containers to store the statistics
+s_degree <- s_centrality <- s_pagerank <- rep(NA, N, remove + 1) 
+
+# add the initial values
+s_degree[1] <- s_pagerank[1] <- s_centrality[1] <- components(x)$csize
+
+# initialise three networks for simulation
+x_degree <- x_centrality <- x_pagerank <- x
+
+for (i in 1:remove) {
+  # select nodes to remove 
+  node_degree <- which.max(degree(x_degree))
+  node_centrality <- which.max(centr_eigen(x_centrality)$vector)
+  node_pagerank <- which.max(page_rank(x_pagerank)$vector)
+  
+  # remove the selected nodes
+  x_degree <- delete.vertices(x_degree, node_degree) 
+  x_centrality <- delete.vertices(x_centrality, node_centrality)
+  x_pagerank <- delete.vertices(x_pagerank, node_pagerank)
+    
+  # calculate largest component
+  s_degree[i + 1] <- max(components(x_degree)$csize) 
+  s_centrality[i + 1] <- max(components(x_centrality)$csize) 
+  s_pagerank[i + 1] <- max(components(x_pagerank)$csize) 
+}
+
+# plot results
+plot(c(0:400), s_degree, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", main = "By degree", lwd = 2) 
+plot(c(0:400), s_centrality, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", main = "By centrality", lwd = 2) 
+plot(c(0:400), s_pagerank, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", main = "By page rank", lwd = 2)
