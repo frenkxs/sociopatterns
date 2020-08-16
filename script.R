@@ -50,9 +50,10 @@ igraph.options(vertex.label = NA,
 plot(x, layout = layout)
 
 #--------------------------------------------
+par(mfrow = c(2, 1))
 
 # degree distribution: natural scale 
-hist(d_bin, col="blue", 
+hist(d_bin, col="grey50", border = "white",
      xlab="Degree", ylab="Frequency", 
      main="Degree Distribution")
 
@@ -62,9 +63,9 @@ d <- 0:max(d_bin)
 ind <- (d_dist != 0)
 t <- d[ind]
 u <- d_dist[ind]
-barplot(log(d[ind]), log(d_dist[ind]), col = "grey50",
-     xlab = c("Log-Degree"), ylab = c("Log-Proportion"), 
-     main="Log-Log Degree Distribution")
+barplot(log(d[ind]), log(d_dist[ind]), col = "grey50", 
+        border = "grey50", xlab = c("Log-Degree"), 
+        ylab = c("Log-Proportion"), main = "Log-Log Degree Distribution")
 
 
 #--------------------------------------------
@@ -92,7 +93,9 @@ average_deg <- function (graph) {
 
 average_deg(x) == knn(x)$knn
 
-plot(d_bin, knn(x)$knn)
+plot(d_bin, knn(x)$knn, col = 'grey50', 
+     main = 'Average degree of the neighbours', xlab = 'Node degree', 
+     ylab = 'Average neighbours degree')
 
 cor(d_bin, knn(x)$knn)
 
@@ -109,6 +112,7 @@ bc <- centr_betw(x)$res
 top_pr <- order(pr, decreasing = TRUE)[1:10]
 top_bc <- order(bc, decreasing = TRUE)[1:10]
 
+# create index to define the colour of the nodes
 central <- rep(1, length(V(x)))
 top <- intersect(top_pr, top_bc)
 central[top] <- 2
@@ -132,25 +136,40 @@ eigen_decomposition <- eigen(L)
 # number of clusters
 n_class <- 3 
 
-# select the correct number of eigenvectors
+# select the three eigenvectors corresponding to the 3 smallest eigenvalues
 dimensions <- n_nodes:(n_nodes - n_class + 1) 
 embedding <- eigen_decomposition$vectors[, dimensions]
 
+# make it reproducible
+set.seed(10)
+
 # kmeans on the set of selected eigenvectors
-members <- kmeans(embedding, n_dim, nstart = 100)$cluster 
+members <- kmeans(embedding, n_class, nstart = 100)$cluster 
 
 # convert to clusters
 clust_spect <- make_clusters(x, members) 
 
 # plot
-plot(clust_spect, x, layout = layout, vertex.color = time_frame)
+igraph.options(vertex.label = NA,
+               vertex.size = d_bin * 0.2, 
+               vertex.color = time_frame,
+               edge.width = 0.5, 
+               edge.color = "grey50", 
+               edge.curved = 0.1)
+
+# define colours for spectral clusters
+cols <- c('#bebf324d', '#0054724d', '#f47d204d')
+
+# plot
+plot(x, layout = layout, mark.groups = clust_spect, 
+     mark.col = cols, mark.border = cols)
 
 # inspect the number of missclassified nodes
 table(time_frame, members)
 
 #--------------------------------------------
 
-#Stochastic Block Model on X with class labels corresponding to time_frame. 
+# Stochastic Block Model on X with class labels corresponding to time_frame. 
 
 # create separate adjacency matrix for each cluster
 X_1 <- X[time_frame == 1, time_frame == 1]
@@ -169,10 +188,9 @@ library(blockmodels)
 
 sbm_x <- BM_bernoulli(membership_type = "SBM_sym", 
                     adj = X,
-                    verbosity = 1, # how much should be printed out while running the algorithm
+                    verbosity = 1,
                     plotting = "",
-                    explore_min = 2,
-                    explore_max = 8) # maximum number of clusters to consider
+                    explore_max = 8) 
 
 # perform VEM
 sbm_x$estimate()
@@ -187,22 +205,48 @@ clust_members <- apply(clust_prob, 1, which.max)
 # plot group sizes
 sbm_x$memberships[[best]]$plot()
 
+# table with cluster sizes
+table(clust_members)
+table(time_frame, clust_members)
+
 # plot connection probabilities
 sbm_x$plot_parameters(best) 
 
 # plot the adjacency matrix
 image(X[order(clust_members),rev(order(clust_members))], xaxt = "n", yaxt = "n") 
 
-### highlight the blocks (very basic coding, it could be improved)
+### highlight the blocks 
 group_counts <- (as.numeric(table(clust_members)))
 abline(v = cumsum(group_counts/sum(group_counts)))
 abline(h = 1-cumsum(group_counts/sum(group_counts)))
 
 # plot clusters
-clust_sbm <- make_clusters(x, clust_members) 
-plot(clust_sbm, x, layout = layout, vertex.label = time_frame)
+# clusters from time frame
+clust_time <- make_clusters(x, time_frame) 
 
-table(time_frame, clust_members)
+# extra plotting options
+igraph_options(vertex.size = 3, 
+               vertex.color = clust_members)
+
+# plot
+plot(x, layout = layout, mark.groups = clust_time, mark.col = cols, 
+     mark.border = cols)
+legend("right", legend = c(1:8), fill = categorical_pal(8), 
+       title = 'Stochastic block\n model clusters',  bty = "n")
+text(-1.2, -0.4, 'Time group 3')
+text(-1.1, 0.2, 'Time group 2')
+text(-0.5, 1, 'Time group 1')
+
+### create a new weighted SBM where the nodes are the groups of the clustering found, and edges are connection probabilities
+sbm_blocks <- graph.adjacency(adjmatrix = sbm_x$model_parameters[[best]]$pi, 
+                              weighted = TRUE, diag = TRUE, 
+                              mode = "undirected")
+layout <- layout_with_fr(sbm_blocks)
+plot(sbm_blocks, edge.width = E(sbm_blocks) * 0.1, 
+     vertex.color = categorical_pal(8), vertex.label = c(1:8),
+     vertex.size = table(clust_members) * 0.5, 
+     layout = layout)
+
 
 #--------------------------------------------
 
@@ -219,12 +263,14 @@ x_three <- asNetwork(x_three)
 
 x_ergm <- x_three ~ edges + kstar(2) + triangle
 
-summary(x_ergm)
-
-x_bergm <- bergm(x_ergm)
+x_bergm <- bergm(x_three ~ edges + kstar(2) + triangle)
 summary(x_bergm)
+
+# MCMC convergence diagnostics
 plot(x_bergm)
-plot(bgof(x_bergm))
+
+# goodness of fit diagnostics
+bgof(x_bergm, n.deg = 10, n.dist = 10, n.esp = 10)
 
 
 #--------------------------------------------
@@ -244,16 +290,17 @@ x_lpm3 <- ergmm(x_three ~ euclidean(d = 2, G = 3), verbose = TRUE)
 # four clusters
 x_lpm4 <- ergmm(x_three ~ euclidean(d = 2, G = 4), verbose = TRUE)
 
-summary(x_lpm1)
-extract(x_lpm1, include.bic = TRUE)
 
-bic.ergmm(x_lpm1)$overall
-bic.ergmm(x_lpm2)$overall 
-bic.ergmm(x_lpm3)$overall
-bic.ergmm(x_lpm4)$overall
+# calculate BIC
+bic1 <- bic.ergmm(x_lpm1)$overall
+bic2 <- bic.ergmm(x_lpm2)$overall 
+bic3 <- bic.ergmm(x_lpm3)$overall
+bic3 <- bic.ergmm(x_lpm4)$overall
+
+# compare BIC values
+which.max(bic1, bic2, bic3, bic4)
 
 # model with 2 cluster is the best
-
 G <- 2
 
 plot(x_lpm2, main = "Latent positions model with 2 clusters", print.formula = FALSE, 
@@ -268,12 +315,10 @@ plot(x_lpm2, main = "Latent positions model with 2 clusters", print.formula = FA
 N <- 50 
 
 # Number of nodes to be removed
-remove <- 200 
+remove <- 350 
 
 # Initialise containers to store the statistics
-component_s <- matrix(NA, N, remove + 1) 
-clustering_c <- matrix(NA, N, remove + 1) 
-modularity_c <- matrix(NA, N, remove + 1)
+component_s <- clustering_c <- modularity_c <- matrix(NA, N, remove + 1) 
 
 # add the initial values
 component_s[, 1] <- components(x)$csize
@@ -303,13 +348,12 @@ for (iter in 1:N) {
 }
 
 ### Plotting function
-
-plot_net <- function(stats, ci = FALSE) {
+plot_net <- function(stats, ci = FALSE, main = NULL) {
   # calculate the median and quantiles 
   dat <- apply(stats, 2, quantile, probs = c(0.05, 0.5, 0.95)) 
   
   # create the background for the plot
-  plot(dat[2,], type = "n", xlab = "nodes removed", ylab = "statistic") 
+  plot(dat[2, ], type = "n", xlab = "Number of nodes removed", ylab = "statistic", main = main)
   
   # add the empirical confidence bounds
   if (ci) {
@@ -319,11 +363,11 @@ plot_net <- function(stats, ci = FALSE) {
   # plot the median as a line
   lines(dat[2,], type = "l", lwd = 2) 
 }
-
-plot_net(clustering_c)
-plot_net(component_s, ci = TRUE)
-plot_net(modularity_c, ci = TRUE)
-
+par(mfrow = c(1, 3))
+plot_net(component_s, ci = TRUE, main = 'Largest component')
+plot_net(clustering_c, main = 'Clustering coefficient')
+plot_net(modularity_c, ci = TRUE, main = 'Modularity')
+par(mfrow = c(1, 1))
 #--------------------------------------------
 
 # resilience - targeted removal
@@ -359,8 +403,10 @@ for (i in 1:remove) {
 
 # plot results
 plot(c(0:400), s_degree, type = "l", xlab = "Number of nodes removed", 
-     ylab = "Size of the largest component", main = "By degree", lwd = 2) 
-plot(c(0:400), s_centrality, type = "l", xlab = "Number of nodes removed", 
-     ylab = "Size of the largest component", main = "By centrality", lwd = 2) 
-plot(c(0:400), s_pagerank, type = "l", xlab = "Number of nodes removed", 
-     ylab = "Size of the largest component", main = "By page rank", lwd = 2)
+     ylab = "Size of the largest component", lwd = 2) 
+lines(c(0:400), s_centrality, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", lwd = 2, col = 'red') 
+lines(c(0:400), s_pagerank, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", lwd = 2, col = 'blue')
+legend("topright", legend = c('By degree', 'By centrality', 'By Page Rank'), 
+       fill = c('black', 'red', 'blue'), bty = "n")

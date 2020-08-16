@@ -1,0 +1,547 @@
+---
+title: Statistical Network Analysis - Final Project
+author: Premysl Velek, 16213669
+output: 
+  pdf_document:
+    fig_crop: no
+    fig_width: 5
+    highlight: tango
+    keep_tex: yes
+    latex_engine: lualatex
+header-includes: 
+- \usepackage{bbm}
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{amsmath}
+- \usepackage{relsize}
+---
+
+# Introduction
+
+The goal of this report is to analyse a network describing a face-to-face behaviour of people during an exhibition in 2009 at the Science Gallery in Dublin, Ireland. Nodes represent exhibition visitors, edges represent face-to-face interactions that were active for at least 20 seconds. 
+
+The dataset is available from [http://www.sociopatterns.org/](http://www.sociopatterns.org/).
+
+---
+
+# Preliminaries
+
+Before we start, we load the necesary libraries, the dataset. We also extract some basic statistics from the networks which we use throughout the report.
+
+```{r load libraries and data, warning=FALSE, results='hide'}
+# ----------- Load data and libraries ------------------
+
+load('dataset.RData')
+
+library(igraph)
+library(Bergm)
+library(intergraph)
+library(network)
+library(latentnet)
+library(blockmodels)
+
+# create weighted and unweigthed networks 
+x <- graph_from_adjacency_matrix(X, mode = 'undirected')
+y <- graph_from_adjacency_matrix(Y, weighted = TRUE, mode = 'undirected')
+
+# store number of nodes and edges
+n_nodes <- length(V(x))
+n_edges <- length(E(x))
+```
+
+---
+
+# Question 1
+
+**Calculate the binary degrees using `X` and the weighted degrees using `Y`. Find out the 5 nodes with the highest binary degree and print out their weighted degrees.**
+
+```{r q1}
+# Binary degree of X and the weighted degrees of Y. 
+d_bin <- degree(x) 
+d_weight <- strength(y)
+
+# 5 nodes with the highest binary degree and their weighted degrees.
+best_bin <- order(d_bin, decreasing = TRUE)[1:5]
+d_weight[best_bin]
+```
+
+The weighted degree of the five nodes with the highest binary degrees are: `r d_weight[best_bin]`.
+---
+
+# Question 2
+
+**Create a visual representation of the network `X`, where the size of the nodes is proportional to the weighted degree, and the nodes are coloured according to time_frame.** 
+
+Since the weighted degrees range from 1 to 294, we need to scale down the vertex size, so that the size of the nodes in the visualisation is within a reasonable range. 
+
+```{r q2, fig.width=8, fig.height=8}
+# define the setting 
+igraph.options(vertex.label = NA,
+               # scale the vertex size by a factor of 0.05
+               vertex.size = d_weight * 0.03, 
+               vertex.color = time_frame,
+               edge.width = 0.3, 
+               edge.color = "grey50", 
+               edge.curved = 0.1)
+
+plot(x, layout = layout)
+```
+
+---
+
+# Question 3
+
+**Consider the distribution of the binary degrees. Create a graphical representation of the degree distribution both in natural scale and in log-log scale. Is there any evidence of a powerlaw behaviour in the tail of the distribution?**
+
+```{r q3, fig.width=10, fig.height=8}
+par(mfrow = c(2, 1))
+
+# degree distribution: natural scale -----------
+hist(d_bin, col="grey50", border = "white",
+     xlab="Degree", ylab="Frequency", 
+     main="Degree Distribution")
+
+# log-log scale ---------------
+
+# calculate degree distribution
+d_dist <- degree.distribution(x)
+
+# define the x axis
+d <- 0:max(d_bin) 
+
+# remove zero values
+ind <- (d_dist != 0)
+t <- d[ind]
+u <- d_dist[ind]
+
+# plot
+barplot(log(d[ind]), log(d_dist[ind]), col = "grey50", 
+        border = "grey50", xlab = c("Log-Degree"), 
+        ylab = c("Log-Proportion"), main = "Log-Log Degree Distribution")
+
+par(mfrow = c(1, 1))
+```
+
+Both the natural scale and the log-log scale plots indicate that there isn't any evidence of a powerlaw behaviour in the tails. The natural scale histograms of powerlaw degree distributions tail off very quickly, and have a long and heavy right tails. The log-log scale histograms then tail off linerarly, following a straight line.
+
+None of the properties are evident in the plots above.
+
+---
+
+# Question 4
+
+**For 'X': calculate the average total degree, the clustering coefficient, the average path length. Also, calculate the average degree of the neighbours of a node as a function of the node’s degree, and comment on this last result.**
+
+To calculate the average total degree, the clustering coefficient and the average path length, we use appropriate functions from the `igraph` package.
+
+```{r q4a}
+# average degree
+cat("The average degree:", mean(d_bin))
+
+# clustering coefficient
+cat("The clustering coefficient:", transitivity(x))
+
+# average path length
+cat("The average path length:", average.path.length(x))
+```
+
+We can use the `knn` function to calculate the average degree of the neightbours, or use a custom function to calculate it manualy. 
+
+```{r q4b}
+
+# custom function
+average_deg <- function (graph) {
+  n <- length(V(graph))
+  dnn <- rep(NA, n)
+  for (i in 1:n) {
+    dnn[i] <- mean(degree(graph, neighbors(graph, i)))
+  }
+  return(dnn)
+}
+
+# see if the results match with the igraph function
+sum(average_deg(x) == knn(x)$knn) == n_nodes
+```
+
+We can now calculate the correlation coefficient between node degree and the node's neighbours' average degree and plot the two values to exlore the mixing structure of the network.
+
+```{r q4c, fig.width=8, fig.height=5}
+
+plot(d_bin, knn(x)$knn, col = 'grey50', 
+     main = 'Average degree of the neighbours', xlab = 'Node degree', 
+     ylab = 'Average neighbours degree')
+
+# Correlation coefficient
+cor(d_bin, knn(x)$knn)
+```
+
+We see that there is a positive correlation which indicate assortative mixing of the degrees. This means that nodes with similar degrees tend to connect with each other. Since assortative mixing is common in social networks, this result is what we would expect.
+
+---
+
+# Question 5
+
+**Calculate the Page-Rank centrality scores and betweenness centrality scores on X. Plot the network with node’s size proportional to Page-Rank, and highlight with a different color the nodes that are in the top 10 according to both centralities.**
+
+```{r q5, fig.width=8, fig.height=8}
+
+# Page rank centrality
+pr <- page_rank(x)$vector 
+
+# Betweenness centrality 
+bc <- centr_betw(x)$res 
+
+# top 10 node accordin to PR centrality and betweenness centrality
+top_pr <- order(pr, decreasing = TRUE)[1:10]
+top_bc <- order(bc, decreasing = TRUE)[1:10]
+
+# create index to define the colour of the nodes
+central <- rep(1, length(V(x)))
+
+# intersection of the two set of top nodes 
+top <- intersect(top_pr, top_bc)
+central[top] <- 2
+  
+# plotting setting with vertex size scaled up by 1000
+igraph.options(vertex.label = NA,
+               vertex.size = pr * 1000, 
+               vertex.color = central,
+               edge.width = 0.5, 
+               edge.color = "grey50", 
+               edge.curved = 0.1)
+
+plot(x, layout = layout)
+```
+
+---
+
+# Question 6
+
+**Use spectral clustering on the Laplacian matrix of X to find 3 latent communities. Plot the network to highlight these communities, and compare them to time_frame. What is the number of nodes that are misclassified (the lowest number, up to a change of group labels)? Note: if you specify nstart = 100, the kmeans algorithm is more likely to converge to the optimal solution.**
+
+```{r q6, fig.width=8, fig.height=8}
+# spectral clustering with Laplacian matrix
+L <- graph.laplacian(x) 
+eigen_decomposition <- eigen(L) 
+
+# number of clusters
+n_class <- 3 
+
+# select the three eigenvectors corresponding to the 3 smallest eigenvalues
+dimensions <- n_nodes:(n_nodes - n_class + 1) 
+embedding <- eigen_decomposition$vectors[, dimensions]
+
+# make it reproducible
+set.seed(10)
+
+# kmeans on the set of selected eigenvectors
+members <- kmeans(embedding, n_class, nstart = 100)$cluster 
+
+# convert to clusters
+clust_spect <- make_clusters(x, members) 
+
+# plot
+igraph.options(vertex.label = NA,
+               vertex.size = d_bin * 0.2, 
+               vertex.color = time_frame)
+
+# define colours for spectral clusters
+cols <- c('#bebf324d', '#0054724d', '#f47d204d')
+
+# plot
+plot(x, layout = layout, mark.groups = clust_spect, 
+     mark.col = cols, mark.border = cols)
+```
+
+In the plot above, the colour of the nodes indicate the membership of the node as defined by the `time_frame`; the coloured polygons cicrle nodes classified in the same group by spectral clustering.^[The size of the node is proportional to the degree of the node.]
+
+We see that the classes match very well. There is a perfect match for group 3 according to the `time_frame` (the lower cluster in the graph coloured in green). This means that nodes in `time_frame` group 3 were all classified in the same group. 
+
+However, we see several misclassfied nodes in groups 2 (coloured in blue). Some of the nodes belonging to group 1 were classified by the spectral clustering algorithm as belonging to group 2, there is also one node which was classified by the spectral clustering as belonging to group 1 but belongs to group 2.
+
+To see the exact number of misclassified nodes, we print out the contingency table.
+
+```{r}
+# inspect the number of missclassified nodes
+table(time_frame, members)
+```
+
+We see that there is a total of 24 misclassified nodes.
+
+---
+
+# Question 7
+
+**Consider a Stochastic Block Model on X where the class labels are known and they correspond to time_frame. Calculate the maximum likelihood estimates for the probability that any two nodes allocated to the first time frame are joined with an edge.**
+
+Since we know the class labels, the maximum likelihood estimates for the probability that any two nodes within the same class are connected is simply the proportion of the number of edges between nodes belonging to the same class to the number of all possible edges in that class.
+
+
+```{r}
+# Stochastic Block Model on X with class labels corresponding to time_frame. 
+
+# create separate adjacency matrix for each cluster
+X_1 <- X[time_frame == 1, time_frame == 1]
+X_2 <- X[time_frame == 2, time_frame == 2]
+X_3 <- X[time_frame == 3, time_frame == 3]
+
+
+# compute the MLE, ie. proportion of existing edges to all possible edges.
+mle_1 <- sum(X_1) / (ncol(X_1)^2)
+
+# compute the MLE, for the other two classes
+# sum(X_2) / (ncol(X_2)^2)
+# sum(X_3) / (ncol(X_3)^2)
+```
+
+The maximum likelihood estimates for the probability that any two nodes within the first time frame is equal to `r round(sum(X_1) / (ncol(X_1)^2), 3)`. 
+
+---
+
+# Question 8
+
+**Using the package blockmodels, fit a Stochastic Block Model on X. You should consider from 2 to 8 groups, and then choose the best model according to the Integrated Completed Likelihood criterion. Discuss the results: how do the groups found compare to the groups indicated by time_frame? Is there any evidence of assortative or disassortative mixing with respect to the cluster labels? Discuss the connectivity behaviour of the various groups.**
+
+```{r q8a}
+library(blockmodels)
+
+sbm_x <- BM_bernoulli(membership_type = "SBM_sym", 
+                      adj = X,
+                      verbosity = 0, 
+                      plotting = "",
+                      explore_max = 8) 
+
+# make it reproducible
+set.seed(10)
+
+# perform VEM
+sbm_x$estimate()
+
+# extract the best model according to ICL values
+best <- which.max(sbm_x$ICL) 
+
+best
+```
+
+We see that the optimal number of group is 8, which is considerably more than the three clusters created by the `time_frame`. We can explore the size of the clusters and how they match with the clusters defined by the time. (In the following I refer to clusters defined by the `time_frame` as *time groups* (time group 1, 2, 3), and clusters determined by the Stochastic Block Model as *blocks* (block 1 through 8).)
+
+```{r q8b}
+# exctract probabilities for class memberships and assign nodes to classes based on them
+clust_prob <- sbm_x$memberships[[best]]$Z 
+clust_members <- apply(clust_prob, 1, which.max) 
+
+# plot group sizes 
+# sbm_x$memberships[[best]]$plot()
+
+# display table with group sizes
+table(clust_members)
+```
+
+We see that the largest groups are group 5 and 1, whereas groups 3, 4 and 6 are the smallest ones. Let's have a look at how the block models align with the clusters according to the time line. 
+
+```{r q8c}
+table(time_frame, clust_members)
+```
+
+From the contingency table, it's clear that the eight groups determined by the SBM represent - to some extent - an internal clusters within the three groups defined by the `time_frame`.
+
+The time group 1 is made up by SBM blocks, 2, 5 and 6; time group 3 consists of blocks 1 and 7; and time group 2 included mainly blocks 3, 4, 7 and 8. The only two blocks that are more or less evenly split between different time groups are block 6 (time group 1 and 2) and 7 (time group 2 and 3).
+
+We can compare the two clustering also visually.
+
+```{r q8d, fig.width=8, fig.height=8}
+# plot clusters ---------
+
+# clusters from time frame
+clust_time <- make_clusters(x, time_frame) 
+
+# extra plotting options
+igraph_options(vertex.size = 3, 
+               vertex.color = clust_members)
+
+# plot
+plot(x, layout = layout, mark.groups = clust_time, mark.col = cols, 
+     mark.border = cols)
+# add legend
+legend("bottomright", legend = c(1:8), fill = categorical_pal(8), 
+       title = 'Stochastic block\n model clusters',  bty = "n")
+
+# add text annotation to indicate the time groups
+text(-1.2, -0.4, 'Time group 3')
+text(-1.1, 0.2, 'Time group 2')
+text(-0.5, 1, 'Time group 1')
+```
+
+In the plot above the colour represent the different blocks as defined by the Stochastic Block Model, the polygons then envelop nodes belonging to the same time groups.
+
+We see the time groups 1 and 3 fairly well separated and mostly consisting of nodes form the same blocks (2 and 5 for time group 1 and 1 for time group 3). The time group 2 is then the most diverse group comprising several blocks, all small blocks as compared to blocks in the time group 1 and 3.
+
+We can also see that block 7 includes nodes on the perifery of the network. The nodes in the block don't form a cluster in the usual sense, as they are scattered across the network and don't connect much to each other.
+
+This type of mixing behaviour is best explored by plotting the connection probabilities.
+
+```{r q8e, fig.width=8, fig.height=5}
+# plot connection probabilities
+sbm_x$plot_parameters(best) 
+```
+
+We see that block 1 has high assortative behaviour, in which nodes tend to connect with each other but almost never connect with nodes from other blocks. The same pattern is also present - albeit to a lesser extent - in block 2 and block 6.
+
+We also see that blocks 3, 4 form the core of the network. They have stong community structure, but they also connect to each other. Nodes from block 4 also connect to block 8, block 3 so weakly connected to nodes from block 7.
+
+The on the opposite side of the spectrum are blocks 7 and 5, whose nodes have low within-group connection probability, but even lower connection probability to nodes from other blocks. We noticed in the previous plot, that nodes from block 7 don't form a typical cluster, Rather they have in common very low connection probablity to nodes in any other block.
+
+It is worth noting that block 5 is the biggest block with 92 nodes. Together with block 7, they constitute over one third of all nodes. This means that big part of the people interacted with very few other people during the exhibition. 
+
+---
+
+# Question 9
+
+**Perform a simulation study where the nodes of X are removed sequentially and uniformly at random. Remove 200 nodes. Consider these statistics:** 
+
+**- the size of the largest component**
+**- the clustering coefficient;**
+**- the modularity of the network with respect to the classes indicated by time_frame**
+
+**Monitor how they change during the process. Comment on the results.**
+
+We will conduct the experiment 50 times for each of the statistics and plot the median value, and the 95 % confidence interval.
+
+```{r q9, fig.width=10, fig.height=5}
+# resilience - random
+
+# Number of iteration
+N <- 50 
+
+# Number of nodes to be removed
+remove <- 200 
+
+# Initialise containers to store the statistics
+component_s <- clustering_c <- modularity_c <- matrix(NA, N, remove + 1) 
+
+# add the initial values
+component_s[, 1] <- components(x)$csize
+clustering_c[, 1] <- transitivity(x)
+modularity_c[, 1] <- modularity(x, time_frame)
+
+# perform N simulations
+for (iter in 1:N) {
+  # initiate the network
+  network <- x
+  
+  # in each simulation sequentially remove nodes at random
+  for (i in 1:remove) {
+    # choose a node at random to be removed 
+    selected_n <- sample(1:length(V(network)), 1, replace = TRUE) 
+     
+    # remove the selected node
+    network <- igraph::delete.vertices(network, selected_n)
+    
+    # calculate the relevant statistics
+    component_s[iter, i + 1] <- max(components(network)$csize) 
+    clustering_c[iter, i + 1] <- transitivity(network)
+    modularity_c[iter, i + 1] <- modularity(network, time_frame[-selected_n])
+  }
+}
+
+### Plotting function
+dat <- apply(modularity_c, 2, quantile, probs = c(0.05, 0.5, 0.95)) 
+plot_net <- function(stats, ci = FALSE, main = NULL) {
+  # calculate the median and quantiles 
+  dat <- apply(stats, 2, quantile, probs = c(0.05, 0.5, 0.95)) 
+  
+  # create the background for the plot
+  plot(dat[2, ], type = "n", xlab = "Number of nodes removed", 
+       ylab = "statistic", main = main)
+  
+  # add the empirical confidence bounds
+  if (ci) {
+  polygon(c(1:(remove + 1),(remove + 1):1), c(dat[1, ], rev(dat[3, ])), 
+          col = "grey", border = NA) 
+  }
+  # plot the median as a line
+  lines(dat[2,], type = "l", lwd = 2) 
+}
+par(mfrow = c(1, 3))
+plot_net(component_s, ci = TRUE, main = 'Largest component')
+plot_net(clustering_c, main = 'Clustering coefficient')
+plot_net(modularity_c, ci = TRUE, main = 'Modularity')
+par(mfrow = c(1, 1))
+```
+
+We see that the network shows a significant resilience in terms of the size of the largest component. Even after 200 removed nodes, there seems to be one giant component that connects most of the nodes in the network. The size of the largest component simply decrease linearly by 1 in each step, which means that the network doesn't easily disintegrated into smaller disconnected components.
+
+The situation is quite different when it comes to clustering coefficient. The plot doesn't show any obvious trend as we remove more and more nodes - the clustering coefficient goes up and down more or less randomly. From the plot, it seems that the variance of the series increases as we remove more and more nodes, which makes sense as with fewer nodes, the clustering coefficient will be more likely to take extreme values of 0 and 1.
+
+The modularity measures how clustered the network is. With more and more nodes removed, the modularity decreases, ie. the comunity structure is weaker and weaker. However, the decrease is not linear: there is a clear plateau between around 50 and 150 nodes removed where the modularity remains more or less the same. After that, there is a sharp decrease.
+
+---
+
+# Question 10
+
+**Perform a simulation study where the nodes of X are removed sequentially using 3 methods: • by degree**
+**-by eigenvector centrality**
+**-by Page-Rank centrality**
+
+**In each of the methods the node with largest value is removed at each iteration. Monitor how the size of the largest component changes and discuss on the results. Remove 400 nodes.**
+
+```{r q10, fig.width=8, fig.height=5}
+# resilience - targeted removal
+
+# Number of nodes to be removed
+remove <- 400 
+
+# Initialise containers to store the statistics
+s_degree <- s_centrality <- s_pagerank <- rep(NA, N, remove + 1) 
+
+# add the initial values
+s_degree[1] <- s_pagerank[1] <- s_centrality[1] <- components(x)$csize
+
+# initialise three networks for simulation
+x_degree <- x_centrality <- x_pagerank <- x
+
+for (i in 1:remove) {
+  # select nodes to remove 
+  node_degree <- which.max(degree(x_degree))
+  node_centrality <- which.max(centr_eigen(x_centrality)$vector)
+  node_pagerank <- which.max(page_rank(x_pagerank)$vector)
+  
+  # remove the selected nodes
+  x_degree <- igraph::delete.vertices(x_degree, node_degree) 
+  x_centrality <- igraph::delete.vertices(x_centrality, node_centrality)
+  x_pagerank <- igraph::delete.vertices(x_pagerank, node_pagerank)
+    
+  # calculate largest component
+  s_degree[i + 1] <- max(components(x_degree)$csize) 
+  s_centrality[i + 1] <- max(components(x_centrality)$csize) 
+  s_pagerank[i + 1] <- max(components(x_pagerank)$csize) 
+}
+
+# plot results
+# plot results
+plot(c(0:400), s_degree, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", lwd = 2) 
+lines(c(0:400), s_centrality, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", lwd = 2, col = 'red') 
+lines(c(0:400), s_pagerank, type = "l", xlab = "Number of nodes removed", 
+     ylab = "Size of the largest component", lwd = 2, col = 'blue')
+legend("topright", legend = c('By degree', 'By centrality', 'By Page Rank'), 
+       fill = c('black', 'red', 'blue'), bty = "n")
+```
+
+We see that the behaviour of the network is similar whether we select the node to be removed by degree, centrality or Page Rank. The network starts to disintegrate much earlier than when we remove the nodes at random. In all three cases, the size of the largest component is less than 50 when around 200 nodes are removed (compare it with previous exercise when the size of the large component was close to 200 after 200 removed nodes).
+
+The first sudden drop in the size of the largest component (from 160 to 84) happens when 172 nodes with the highest degree are removed. Similar drops are present when we remove nodes by centrality and by Page Rank. When we remove nodes by centrality, the drop happens slightly later, when we remove nodes by Page Rank, the size of the largest component drops much earlier - with 125 nodes removed.
+
+In general, this behaviour is what we expected - networks are much less resilient when the removal of the node is targeted.
+
+---
+
+# Question 11
+
+***Consider the subnetwork of the nodes that mostly interact in the third time frame (i.e. `time_frame == 3`). Fit an Exponential Random Graph Model on this network using the package Bergm and summary statistics:**
+**-the number of edges**
+**-the number of two-stars**
+**-the number of triangles**
+
+**You should run the algorithm without changing the sampling parameters, e.g. the number of iterations. Based on the convergence diagnostics plots, comment on whether the results obtained can be considered reliable. Based on the Bayesian goodness of fit plots, express an opinion on whether this may be a good model for the data.**
